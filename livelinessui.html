@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LiveScan — Face Liveness Detection</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080c10;
+    --surface: #0e1420;
+    --surface2: #141c2a;
+    --border: rgba(99,198,255,0.12);
+    --accent: #63c6ff;
+    --accent2: #00ffa3;
+    --danger: #ff4d6d;
+    --warn: #ffb830;
+    --text: #e8f4ff;
+    --muted: rgba(232,244,255,0.45);
+    --mono: 'Space Mono', monospace;
+    --sans: 'DM Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(99,198,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(99,198,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none; z-index: 0;
+  }
+
+  .page { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2.5rem; }
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo-icon { width: 36px; height: 36px; }
+  .logo-icon svg { width: 100%; height: 100%; }
+  .logo-text { font-family: var(--mono); font-size: 1.15rem; font-weight: 700; letter-spacing: .06em; }
+  .logo-text span { color: var(--accent); }
+  .version-tag { font-family: var(--mono); font-size: 10px; color: var(--muted); border: 1px solid var(--border); padding: 3px 8px; border-radius: 4px; }
+
+  .server-status { display: flex; align-items: center; gap: 8px; }
+  #healthDot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; transition: background .4s; }
+  #healthDot.ok  { background: var(--accent2); box-shadow: 0 0 8px var(--accent2); }
+  #healthDot.err { background: var(--danger);  box-shadow: 0 0 8px var(--danger); }
+  #healthLabel { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+
+  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 1.25rem; }
+  @media(max-width:700px) { .layout { grid-template-columns: 1fr; } }
+
+  .vid-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+  .vid-wrap  { position: relative; width: 100%; aspect-ratio: 4/3; background: #000; }
+
+  video { transform: scaleX(-1); }
+  canvas.overlay { transform: scaleX(-1); pointer-events: none; }
+
+  video, canvas.overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover;
+  }
+  canvas.overlay { pointer-events: none; }
+
+  .scanline {
+    position: absolute; top: 0; left: 0; width: 100%; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0; pointer-events: none; animation: scan 2s linear infinite;
+  }
+  @keyframes scan {
+    0%   { top: 0;    opacity: 0; }
+    10%  { opacity: .6; }
+    90%  { opacity: .6; }
+    100% { top: 100%; opacity: 0; }
+  }
+  .vid-wrap.active .scanline { opacity: 1; }
+
+  .cam-overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px;
+    background: #000; color: var(--muted); font-size: 13px;
+    font-family: var(--mono); z-index: 2; transition: opacity .4s;
+  }
+  .cam-overlay.hidden { opacity: 0; pointer-events: none; }
+  .cam-overlay svg { opacity: .3; }
+  .cam-spinner {
+    width: 28px; height: 28px; border: 2px solid var(--border);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .8s linear infinite; display: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .vid-footer { display: flex; gap: 8px; padding: 12px 14px; flex-wrap: wrap; justify-content: center; }
+
+  .btn {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .06em;
+    text-transform: uppercase; padding: 9px 22px; border-radius: 7px;
+    cursor: pointer; border: 1px solid; transition: all .18s; white-space: nowrap;
+  }
+  .btn-success { background: rgba(0,255,163,0.1); border-color: var(--accent2); color: var(--accent2); }
+  .btn-success:hover { background: rgba(0,255,163,0.2); }
+  .btn-primary { background: rgba(99,198,255,0.1); border-color: var(--accent); color: var(--accent); }
+  .btn-primary:hover { background: rgba(99,198,255,0.2); }
+  .btn-danger { background: rgba(255,77,109,0.1); border-color: var(--danger); color: var(--danger); }
+  .btn-danger:hover { background: rgba(255,77,109,0.2); }
+  .btn-muted { background: transparent; border-color: var(--border); color: var(--muted); }
+  .btn-muted:hover { border-color: rgba(99,198,255,0.3); color: var(--text); }
+  .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .side { display: flex; flex-direction: column; gap: 1rem; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 1rem 1.1rem; }
+  .card-head {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card-head::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .metric { background: var(--surface2); border-radius: 8px; padding: 10px; border: 1px solid var(--border); }
+  .metric-label { font-size: 10px; color: var(--muted); margin-bottom: 4px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+  .metric-val { font-family: var(--mono); font-size: 1.3rem; font-weight: 700; color: var(--text); }
+  .metric-val.good { color: var(--accent2); }
+  .metric-val.bad  { color: var(--danger); }
+  .metric-val.warn { color: var(--warn); }
+
+  .challenge {
+    background: linear-gradient(135deg, rgba(99,198,255,0.07), rgba(0,255,163,0.04));
+    border: 1px solid rgba(99,198,255,0.25); border-radius: 10px;
+    padding: 14px; text-align: center;
+  }
+  .challenge-icon { font-size: 2rem; margin-bottom: 6px; }
+  .challenge-text { font-size: 1.1rem; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+  .challenge-sub  { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+  .timer-bar  { height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+  .timer-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width .25s linear; }
+  .timer-fill.low { background: var(--danger); }
+
+  .verdict { border-radius: 10px; padding: 20px; text-align: center; animation: popIn .4s cubic-bezier(.34,1.56,.64,1); }
+  @keyframes popIn { from { transform: scale(.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .verdict.real { background: rgba(0,255,163,0.08); border: 1px solid rgba(0,255,163,0.35); }
+  .verdict.fake { background: rgba(255,77,109,0.08); border: 1px solid rgba(255,77,109,0.35); }
+  .verdict-icon  { font-size: 2.5rem; margin-bottom: 6px; }
+  .verdict-title { font-family: var(--mono); font-size: 1rem; font-weight: 700; letter-spacing: .08em; }
+  .verdict.real .verdict-title { color: var(--accent2); }
+  .verdict.fake .verdict-title { color: var(--danger); }
+  .verdict-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  .progress-dots { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+  .dot { width: 28px; height: 6px; border-radius: 3px; background: var(--border); transition: background .3s; }
+  .dot.pass   { background: var(--accent2); }
+  .dot.fail   { background: var(--danger); }
+  .dot.active { background: var(--accent); animation: blink 1s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  .log {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    background: var(--surface2); border-radius: 8px; padding: 10px;
+    max-height: 130px; overflow-y: auto; line-height: 1.7;
+  }
+  .log::-webkit-scrollbar { width: 4px; }
+  .log::-webkit-scrollbar-track { background: transparent; }
+  .log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .log-line { display: flex; gap: 8px; }
+  .log-time { color: rgba(99,198,255,0.4); flex-shrink: 0; }
+  .log-ok   { color: var(--accent2); }
+  .log-err  { color: var(--danger); }
+  .log-warn { color: var(--warn); }
+
+  .face-corners { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .4s; }
+  .face-corners.visible { opacity: 1; }
+  .corner { position: absolute; width: 20px; height: 20px; border-color: var(--accent2); border-style: solid; }
+  .corner.tl { top: 12px;    left: 12px;  border-width: 2px 0 0 2px; }
+  .corner.tr { top: 12px;    right: 12px; border-width: 2px 2px 0 0; }
+  .corner.bl { bottom: 12px; left: 12px;  border-width: 0 0 2px 2px; }
+  .corner.br { bottom: 12px; right: 12px; border-width: 0 2px 2px 0; }
+
+  .countdown-wrap { position: relative; width: 56px; height: 56px; margin: 0 auto 8px; }
+  .countdown-svg  { transform: rotate(-90deg); }
+  .countdown-val  {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--accent);
+  }
+  .countdown-val.low { color: var(--danger); }
+
+  .cam-error {
+    background: rgba(255,77,109,0.1); border: 1px solid rgba(255,77,109,0.3);
+    border-radius: 8px; padding: 10px 14px; font-size: 13px; color: var(--danger);
+    margin-bottom: 1rem; display: none; font-family: var(--mono);
+  }
+
+  /* ── Photo Check Result ── */
+  .photo-check {
+    border-radius: 10px; padding: 14px; margin-top: 10px;
+    animation: popIn .4s cubic-bezier(.34,1.56,.64,1);
+  }
+  .photo-check.pass { background: rgba(0,255,163,0.06);  border: 1px solid rgba(0,255,163,0.25); }
+  .photo-check.fail { background: rgba(255,77,109,0.06); border: 1px solid rgba(255,77,109,0.25); }
+  .photo-check.wait { background: rgba(99,198,255,0.06); border: 1px solid rgba(99,198,255,0.2); }
+  .photo-check-head {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .1em;
+    text-transform: uppercase; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .photo-check.pass .photo-check-head { color: var(--accent2); }
+  .photo-check.fail .photo-check-head { color: var(--danger); }
+  .photo-check.wait .photo-check-head { color: var(--accent); }
+  .photo-check-rows { display: flex; flex-direction: column; gap: 6px; }
+  .photo-check-row {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--surface2); border-radius: 6px; padding: 7px 10px;
+  }
+  .photo-check-label { color: var(--muted); font-family: var(--mono); font-size: 10px; text-transform: uppercase; }
+  .photo-check-val   { font-family: var(--mono); font-size: 12px; font-weight: 700; }
+  .photo-check-val.ok  { color: var(--accent2); }
+  .photo-check-val.bad { color: var(--danger); }
+  .photo-check-val.neu { color: var(--accent); }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 10px;
+    padding: 2px 7px; border-radius: 4px; margin: 2px;
+    background: rgba(255,77,109,0.15); border: 1px solid rgba(255,77,109,0.3); color: var(--danger);
+  }
+  .final-banner {
+    margin-top: 12px; border-radius: 10px; padding: 16px;
+    text-align: center; font-family: var(--mono); font-size: 13px;
+    font-weight: 700; letter-spacing: .06em;
+    animation: popIn .5s cubic-bezier(.34,1.56,.64,1);
+  }
+  .final-banner.complete { background: rgba(0,255,163,0.1);  border: 1px solid rgba(0,255,163,0.4);  color: var(--accent2); }
+  .final-banner.blocked  { background: rgba(255,184,48,0.1); border: 1px solid rgba(255,184,48,0.4); color: var(--warn); }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <div class="logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="18" cy="18" r="17" stroke="#63c6ff" stroke-width="1.5" stroke-dasharray="4 2"/>
+          <circle cx="18" cy="18" r="9"  stroke="#00ffa3" stroke-width="1.5"/>
+          <circle cx="18" cy="18" r="3"  fill="#63c6ff"/>
+          <line x1="18" y1="1"  x2="18" y2="8"  stroke="#63c6ff" stroke-width="1.5"/>
+          <line x1="18" y1="28" x2="18" y2="35" stroke="#63c6ff" stroke-width="1.5"/>
+          <line x1="1"  y1="18" x2="8"  y2="18" stroke="#63c6ff" stroke-width="1.5"/>
+          <line x1="28" y1="18" x2="35" y2="18" stroke="#63c6ff" stroke-width="1.5"/>
+        </svg>
+      </div>
+      <div class="logo-text">Live<span>Scan</span></div>
+    </div>
+    <div class="server-status">
+      <div id="healthDot"></div>
+      <span id="healthLabel">connecting…</span>
+      <div class="version-tag">v2.0 · Anti-Spoof</div>
+    </div>
+  </header>
+
+  <div id="camError" class="cam-error">Camera access denied — please allow camera permission and reload the page.</div>
+
+  <div class="layout">
+    <div class="vid-panel">
+      <div class="vid-wrap" id="vw">
+        <div class="cam-overlay" id="camOverlay">
+          <div class="cam-spinner" id="camSpinner"></div>
+          <svg id="camIcon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
+          </svg>
+          <span id="camLabel">Starting camera…</span>
+        </div>
+        <video id="vid" autoplay playsinline muted></video>
+        <canvas id="ov" class="overlay"></canvas>
+        <div class="scanline"></div>
+        <div class="face-corners" id="fc">
+          <div class="corner tl"></div><div class="corner tr"></div>
+          <div class="corner bl"></div><div class="corner br"></div>
+        </div>
+      </div>
+      <div class="vid-footer">
+        <button class="btn btn-success" id="btnStart"   onclick="startSession()"    disabled>Start Challenge</button>
+        <button class="btn btn-danger"  id="btnStop"    onclick="stopSession(false)" disabled>Stop</button>
+        <!-- FIX 2: Camera Off now just turns off; Start Camera re-enables it -->
+        <button class="btn btn-muted"   id="btnCamOff"  onclick="stopSession(true)">Camera Off</button>
+        <button class="btn btn-primary" id="btnCamOn"   onclick="initCamera()" style="display:none">Start Camera</button>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <div class="card-head">Status</div>
+        <div id="challengeBody">
+          <div style="text-align:center;color:var(--muted);font-size:13px;padding:1rem 0">
+            Camera starting — press Start Challenge to begin
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Frame Metrics</div>
+        <div class="metrics">
+          <div class="metric"><div class="metric-label">Faces</div><div class="metric-val" id="s-faces">—</div></div>
+          <div class="metric"><div class="metric-label">EAR</div><div class="metric-val" id="s-ear">—</div></div>
+          <div class="metric"><div class="metric-label">Blinks</div><div class="metric-val" id="s-blinks">—</div></div>
+          <div class="metric"><div class="metric-label">Time Left</div><div class="metric-val" id="s-time">—</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">Log</div>
+        <div class="log" id="log">Starting…</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API = 'http://localhost:8000';
+
+let sessionTimer    = null;
+let sessionRunning  = false;
+let sessionFinal    = false;
+let currentChallengeTimeout = 8;
+let _lastChallengeIdx = -1;
+let camReady = false;
+
+function ts() {
+  return new Date().toLocaleTimeString('en-US',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+function addLog(msg, cls='') {
+  const el   = document.getElementById('log');
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = `<span class="log-time">${ts()}</span><span class="${cls}">${msg}</span>`;
+  el.prepend(line);
+  while (el.children.length > 80) el.removeChild(el.lastChild);
+}
+function setMetric(id, val, cls='') {
+  const el = document.getElementById(id);
+  el.textContent = val;
+  el.className   = 'metric-val' + (cls ? ' ' + cls : '');
+}
+
+// FIX 1: The video is CSS-mirrored (scaleX(-1)) so what the user sees as
+// "their left" is actually the RIGHT side in raw server coords, and vice versa.
+// The server challenge "turn LEFT" means the nose moves left in raw coords,
+// which looks like moving RIGHT from the user's mirrored perspective.
+// So we swap left↔right in the DISPLAY text and icon only.
+function mirrorDir(dir) {
+  return dir === 'left' ? 'right' : dir === 'right' ? 'left' : dir;
+}
+
+function challengeIcon(ch) {
+  if (!ch) return '🔍';
+  if (ch.type === 'blink') return '👁';
+  const d = mirrorDir(ch.dir || '');
+  return d==='left'?'👈':d==='right'?'👉':d==='up'?'☝️':d==='down'?'👇':'🔄';
+}
+
+function challengeText(ch) {
+  if (!ch) return '';
+  if (ch.type !== 'head') return ch.text;
+  // Swap LEFT↔RIGHT in the display text so it matches the mirrored camera view.
+  // The server's "turn LEFT" = nose moves left in raw frame = user turns RIGHT
+  // in the mirror. We tell the user what they should see themselves do.
+  return ch.text
+    .replace(/\bLEFT\b/gi,  '__R__')
+    .replace(/\bRIGHT\b/gi, 'LEFT')
+    .replace(/__R__/g,       'RIGHT');
+}
+
+async function checkHealth() {
+  const dot   = document.getElementById('healthDot');
+  const label = document.getElementById('healthLabel');
+  try {
+    const r = await fetch(API + '/health');
+    const d = await r.json();
+    dot.className = 'ok';
+    label.textContent = 'server ok';
+    label.style.color = 'var(--accent2)';
+    addLog('Server online · MediaPipe:' + (d.mediapipe?'✓':'✗') + ' YOLO:' + (d.yolo?'✓':'✗'), 'log-ok');
+  } catch(e) {
+    dot.className = 'err';
+    label.textContent = 'server offline';
+    label.style.color = 'var(--danger)';
+    addLog('Server unreachable: ' + e.message, 'log-err');
+  }
+}
+
+async function initCamera() {
+  // FIX 2: Reset error banner and show/hide correct buttons each time called
+  document.getElementById('camError').style.display = 'none';
+  document.getElementById('btnCamOff').style.display = 'inline-flex';
+  document.getElementById('btnCamOn').style.display  = 'none';
+
+  const spinner = document.getElementById('camSpinner');
+  const icon    = document.getElementById('camIcon');
+  const lbl     = document.getElementById('camLabel');
+  const overlay = document.getElementById('camOverlay');
+
+  // Show the overlay while requesting
+  overlay.classList.remove('hidden');
+  spinner.style.display = 'block';
+  icon.style.display    = 'none';
+  lbl.textContent       = 'Requesting camera…';
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: 640, height: 480 }
+    });
+    camStream = stream;
+    const v = document.getElementById('vid');
+    v.srcObject = stream;
+    await new Promise(res => { v.onloadedmetadata = res; });
+    overlay.classList.add('hidden');
+    document.getElementById('vw').classList.add('active');
+    document.getElementById('btnStart').disabled = false;
+    camReady = true;
+    addLog('Camera ready', 'log-ok');
+  } catch(e) {
+    spinner.style.display = 'none';
+    icon.style.display    = 'block';
+    lbl.textContent       = 'Camera access denied';
+    document.getElementById('camError').style.display = 'block';
+    // FIX 2: On failure, still show Start Camera so user can retry
+    document.getElementById('btnCamOff').style.display = 'none';
+    document.getElementById('btnCamOn').style.display  = 'inline-flex';
+    addLog('Camera error: ' + e.message, 'log-err');
+  }
+}
+
+function grabFrame(quality=0.82) {
+  const v = document.getElementById('vid');
+  if (!v.videoWidth) return null;
+  const c = document.createElement('canvas');
+  c.width  = v.videoWidth;
+  c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  return c.toDataURL('image/jpeg', quality).split(',')[1];
+}
+
+function drawBoxes(faces, verdict) {
+  const cv  = document.getElementById('ov');
+  const v   = document.getElementById('vid');
+  cv.width  = v.videoWidth  || 640;
+  cv.height = v.videoHeight || 480;
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (!faces || !faces.length) return;
+  const color = verdict === 'REAL PERSON' ? '#00ffa3'
+              : verdict === 'FAKE / SPOOF' ? '#ff4d6d'
+              : '#63c6ff';
+  faces.forEach(f => {
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.strokeRect(f.x1, f.y1, f.x2 - f.x1, f.y2 - f.y1);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(f.x1, f.y1 - 18, 52, 18);
+    ctx.fillStyle = color; ctx.font = '11px Space Mono, monospace';
+    ctx.fillText((f.conf * 100).toFixed(0) + '%', f.x1 + 4, f.y1 - 4);
+  });
+}
+
+async function startSession() {
+  if (!camReady) return;
+  try {
+    const r = await fetch(API + '/session/start', { method: 'POST' });
+    if (!r.ok) { addLog(`Start failed HTTP ${r.status}`, 'log-err'); return; }
+    const d = await r.json();
+
+    sessionRunning    = true;
+    sessionFinal      = false;
+    _lastChallengeIdx = -1;
+    document.getElementById('btnStart').disabled = true;
+    document.getElementById('btnStop').disabled  = false;
+
+    if (d.current_challenge) currentChallengeTimeout = d.current_challenge.time_left || 8;
+    renderSession(d);
+    addLog('Session started — ' + (d.current_challenge?.text || ''), 'log-ok');
+
+    clearInterval(sessionTimer);
+    sessionTimer = setInterval(feedSession, 200);
+  } catch(e) {
+    addLog('Start error: ' + e.message, 'log-err');
+  }
+}
+
+let camStream = null;
+
+function stopSession(stopCam = false) {
+  clearInterval(sessionTimer);
+  sessionRunning = false;
+  sessionFinal   = false;
+  document.getElementById('btnStart').disabled = !camReady || stopCam;
+  document.getElementById('btnStop').disabled  = true;
+  document.getElementById('fc').classList.remove('visible');
+  const cv = document.getElementById('ov');
+  cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+
+  if (stopCam && camStream) {
+    camStream.getTracks().forEach(t => t.stop());
+    camStream = null;
+    camReady  = false;
+    const v   = document.getElementById('vid');
+    v.srcObject = null;
+    document.getElementById('vw').classList.remove('active');
+    document.getElementById('camOverlay').classList.remove('hidden');
+    document.getElementById('camSpinner').style.display = 'none';
+    document.getElementById('camIcon').style.display    = 'block';
+    document.getElementById('camLabel').textContent     = 'Camera stopped';
+    document.getElementById('btnStart').disabled        = true;
+
+    // FIX 2: Swap buttons — hide Camera Off, show Start Camera
+    document.getElementById('btnCamOff').style.display = 'none';
+    document.getElementById('btnCamOn').style.display  = 'inline-flex';
+
+    addLog('Camera stopped', 'log-warn');
+  }
+
+  document.getElementById('challengeBody').innerHTML =
+    `<div style="text-align:center;color:var(--muted);font-size:13px;padding:1rem 0">
+      ${stopCam ? 'Camera off — press Start Camera to restart' : 'Session stopped — press Start Challenge to try again'}
+    </div>`;
+  addLog(stopCam ? 'Camera off' : 'Session stopped', 'log-warn');
+}
+
+async function feedSession() {
+  if (!sessionRunning) return;
+  const b64 = grabFrame(0.80);
+  if (!b64) return;
+  try {
+    const r = await fetch(API + '/session/update/base64', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ image: b64 })
+    });
+    if (!r.ok) { addLog(`Update HTTP ${r.status}`, 'log-err'); return; }
+    const d = await r.json();
+
+    const m = d.metrics || {};
+    setMetric('s-faces',  m.face_count ?? '—', (m.face_count||0)>0 ? 'good' : 'bad');
+    setMetric('s-ear',    m.ear != null ? m.ear.toFixed(3) : '—');
+    setMetric('s-blinks', d.blinks ?? '—');
+    setMetric('s-time',   m.time_left != null ? m.time_left.toFixed(1)+'s' : '—',
+              m.time_left < 2.5 ? 'warn' : '');
+
+    document.getElementById('fc').classList.toggle('visible', (m.face_count||0) > 0);
+    if (d.faces) drawBoxes(d.faces, d.verdict);
+
+    if (d.current_challenge) {
+      currentChallengeTimeout = Math.max(currentChallengeTimeout, d.current_challenge.time_left || 8);
+    }
+
+    window._lastSessionData = d;
+
+    if (d.final_done && !sessionFinal) {
+      // Stop polling FIRST so renderSession is only called once
+      sessionFinal   = true;
+      sessionRunning = false;
+      clearInterval(sessionTimer);
+      document.getElementById('btnStart').disabled = false;
+      document.getElementById('btnStop').disabled  = true;
+      const real = d.verdict === 'REAL PERSON';
+      addLog(`VERDICT: ${d.verdict}  (${d.passes}/${d.challenges_needed} passed)`,
+             real ? 'log-ok' : 'log-err');
+      // Log photo check
+      if (d.photo_check) {
+        const pc = d.photo_check;
+        if (pc.error) {
+          addLog(`Photo check error: ${pc.error}`, 'log-err');
+        } else if (pc.decision === 1) {
+          addLog('Photo check PASSED — face clean, no accessories', 'log-ok');
+        } else {
+          const reason = pc.reason || (pc.accessories_detected && pc.accessories_detected.join(', ')) || 'unknown';
+          addLog(`Photo check FAILED — ${reason}`, 'log-err');
+        }
+      }
+      // Render verdict exactly once after stopping
+      renderSession(d);
+    } else if (!sessionFinal) {
+      renderSession(d);
+    }
+  } catch(e) {
+    addLog('Feed error: ' + e.message, 'log-err');
+  }
+}
+
+function renderSession(d) {
+  const el = document.getElementById('challengeBody');
+
+  if (d.final_done) {
+    const real = d.verdict === 'REAL PERSON';
+    el.innerHTML = `
+      <div class="verdict ${real ? 'real' : 'fake'}">
+        <div class="verdict-icon">${real ? '✅' : '❌'}</div>
+        <div class="verdict-title">${d.verdict}</div>
+        <div class="verdict-sub">${d.passes} of ${d.challenges_needed} challenges passed</div>
+      </div>
+      ${buildDots(d)}
+      ${buildPhotoCheck(d)}
+      <div style="text-align:center;margin-top:14px">
+        <button class="btn btn-primary" onclick="startSession()">Try Again</button>
+      </div>`;
+    return;
+  }
+
+  const ch = d.current_challenge;
+  if (!ch) return;
+
+  if (ch.index !== _lastChallengeIdx) {
+    currentChallengeTimeout = ch.time_left;
+    _lastChallengeIdx = ch.index;
+    if (ch.index > 1) addLog(`Challenge ${ch.index}: ${ch.text}`, 'log-warn');
+  }
+
+  const maxT = currentChallengeTimeout || 8;
+  const pct  = Math.min(100, Math.round((ch.time_left / maxT) * 100));
+  const low  = ch.time_left < 2.5;
+
+  el.innerHTML = `
+    <div class="challenge">
+      <div class="challenge-icon">${challengeIcon(ch)}</div>
+      <div class="challenge-text">${challengeText(ch)}</div>
+      <div class="challenge-sub">Challenge ${ch.index} of ${ch.total}</div>
+      <div class="countdown-wrap">
+        <svg class="countdown-svg" width="56" height="56" viewBox="0 0 56 56">
+          <circle cx="28" cy="28" r="24" fill="none" stroke="rgba(99,198,255,0.12)" stroke-width="4"/>
+          <circle cx="28" cy="28" r="24" fill="none"
+            stroke="${low ? '#ff4d6d' : '#63c6ff'}" stroke-width="4"
+            stroke-dasharray="${(2*Math.PI*24).toFixed(2)}"
+            stroke-dashoffset="${(2*Math.PI*24*(1-pct/100)).toFixed(2)}"
+            stroke-linecap="round"/>
+        </svg>
+        <div class="countdown-val ${low ? 'low' : ''}">${ch.time_left.toFixed(1)}</div>
+      </div>
+      <div class="timer-bar">
+        <div class="timer-fill ${low ? 'low' : ''}" style="width:${pct}%"></div>
+      </div>
+    </div>
+    ${buildDots(d)}
+    <div style="text-align:center;margin-top:8px;font-family:var(--mono);font-size:11px;color:var(--muted)">
+      ${d.passes} pass &nbsp;·&nbsp; ${d.fails} fail
+    </div>`;
+}
+
+function buildPhotoCheck(d) {
+  // Not shown if liveness failed
+  if (d.verdict !== 'REAL PERSON') return '';
+
+  // No photo_check yet — show capture button
+  if (!d.photo_check) return '';
+
+  // Pending — user needs to press Capture
+  if (d.photo_check.pending) {
+    return `
+      <div class="photo-check wait" style="text-align:center">
+        <div class="photo-check-head" style="justify-content:center">📸 Photo Check</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px;font-family:var(--mono)">
+          Look straight at the camera then press Capture
+        </div>
+        <button class="btn btn-primary" id="btnCapture" onclick="captureAndCheck()">
+          📸 &nbsp; CAPTURE &amp; CHECK
+        </button>
+      </div>`;
+  }
+
+  const pc  = d.photo_check;
+  const cls = pc.error ? 'fail' : pc.decision === 1 ? 'pass' : 'fail';
+
+  // Build accessories tags if any
+  const tags = (pc.accessories_detected || [])
+    .map(a => `<span class="tag">${a}</span>`).join('');
+
+  // Overall process banner
+  const allOk  = d.verdict === 'REAL PERSON' && pc.decision === 1;
+  const banner = `<div class="final-banner ${allOk ? 'complete' : 'blocked'}">
+    ${allOk ? '🎉 VERIFICATION COMPLETE — Proceed to document upload'
+            : '⚠️ VERIFICATION BLOCKED — Retry required'}
+  </div>`;
+
+  return `
+    <div class="photo-check ${cls}">
+      <div class="photo-check-head">
+        ${cls === 'pass' ? '📸 Photo Check — Passed' : '📸 Photo Check — Failed'}
+      </div>
+      <div class="photo-check-rows">
+        <div class="photo-check-row">
+          <span class="photo-check-label">Face Detected</span>
+          <span class="photo-check-val ${pc.face_detected ? 'ok' : 'bad'}">
+            ${pc.face_detected ? 'YES' : 'NO'}
+          </span>
+        </div>
+        <div class="photo-check-row">
+          <span class="photo-check-label">Face Count</span>
+          <span class="photo-check-val ${pc.face_count === 1 ? 'ok' : 'bad'}">
+            ${pc.face_count ?? '—'}
+          </span>
+        </div>
+        <div class="photo-check-row">
+          <span class="photo-check-label">Accessories</span>
+          <span class="photo-check-val ${tags ? 'bad' : 'ok'}">
+            ${tags || '<span style="color:var(--accent2)">None ✓</span>'}
+          </span>
+        </div>
+        <div class="photo-check-row">
+          <span class="photo-check-label">Decision</span>
+          <span class="photo-check-val ${pc.decision === 1 ? 'ok' : 'bad'}">
+            ${pc.decision === 1 ? '✅ ALLOWED' : '❌ BLOCKED'}
+          </span>
+        </div>
+        ${pc.reason ? `<div class="photo-check-row">
+          <span class="photo-check-label">Reason</span>
+          <span class="photo-check-val bad">${pc.reason}</span>
+        </div>` : ''}
+      </div>
+    </div>
+    ${banner}`;
+}
+
+function buildDots(d) {
+  return '<div class="progress-dots">' +
+    Array.from({ length: d.challenges_needed }, (_, i) => {
+      let cls = '';
+      if      (i < d.passes)                               cls = 'pass';
+      else if (i < d.passes + d.fails)                    cls = 'fail';
+      else if (i === d.passes + d.fails && !d.final_done) cls = 'active';
+      return `<div class="dot ${cls}"></div>`;
+    }).join('') +
+  '</div>';
+}
+
+async function captureAndCheck() {
+  const b64 = grabFrame(0.92);
+  if (!b64) { addLog('No frame to capture', 'log-err'); return; }
+
+  const btn = document.getElementById('btnCapture');
+  if (btn) { btn.disabled = true; btn.textContent = 'CHECKING…'; }
+
+  try {
+    const r = await fetch(API + '/session/capture', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ image: b64 })
+    });
+    if (!r.ok) { addLog(`Capture failed HTTP ${r.status}`, 'log-err'); return; }
+    const pc = await r.json();
+
+    // Update the challenge body with photo check result
+    const d = { ...window._lastSessionData, photo_check: pc };
+    window._lastSessionData = d;
+    renderSession(d);
+
+    if (pc.error) {
+      addLog(`Photo check error: ${pc.error}`, 'log-err');
+    } else if (pc.decision === 1) {
+      addLog('Photo check PASSED — face clean, no accessories', 'log-ok');
+    } else {
+      const reason = pc.reason || (pc.accessories_detected && pc.accessories_detected.join(', ')) || 'unknown';
+      addLog(`Photo check FAILED — ${reason}`, 'log-err');
+    }
+  } catch(e) {
+    addLog('Capture error: ' + e.message, 'log-err');
+    if (btn) { btn.disabled = false; btn.textContent = 'CAPTURE & CHECK'; }
+  }
+}
+
+window.addEventListener('load', () => {
+  initCamera();
+  setTimeout(checkHealth, 800);
+});
+</script>
+</body>
+</html>
