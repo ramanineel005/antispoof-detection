@@ -165,6 +165,11 @@ Refer to the Dockerfile and application configuration for any additional environ
 - Add automated testing and deployment monitoring.
 - Improve deployment configuration and documentation.
 
+## Demo Screenshot
+
+![Face liveness detection demo](liveness-detection-demo.png)
+
+
 ## Author
 
 **Neel Ramani**
